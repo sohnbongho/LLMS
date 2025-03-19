@@ -135,6 +135,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+rag/chroma/*
 
 # Spyder project settings
 .spyderproject
