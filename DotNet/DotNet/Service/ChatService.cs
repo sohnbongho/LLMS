@@ -1,7 +1,13 @@
 ﻿using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using DotNetLLM.DTO;
 using DotNetLLM.Repo;
+using LangChain.Databases.Sqlite;
+using LangChain.DocumentLoaders;
+using LangChain.Extensions;
+using LangChain.Providers.Ollama;
 using log4net;
+using Ollama;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Text.Json;
@@ -20,7 +26,12 @@ public class ChatService
         _repo = repo;
     }
 
-    public async Task<ChatResponse> Chat(ChatRequest request)
+    /// <summary>
+    /// 
+    /// </summary>
+    /// <param name="request"></param>
+    /// <returns></returns>    
+    public async Task<ChatResponse> Chat_Test1(ChatRequest request)
     {
         var question = request.Question;
         string docText = "";
@@ -40,7 +51,7 @@ public class ChatService
 
             var payload = new
             {
-                model = "llama3.2:1b",
+                model = "deepseek-r1:1.5b",
                 stream = false,
                 messages = new[]
                 {
@@ -59,7 +70,7 @@ public class ChatService
                 Content = answer ?? string.Empty,
             };
         }
-        catch(Exception ex)
+        catch (Exception ex)
         {
             _logger.Error("fail chat. ", ex);
             return new ChatResponse
@@ -67,8 +78,83 @@ public class ChatService
                 Content = string.Empty,
             };
         }
+    }
+    public async Task<ChatResponse> Chat(ChatRequest request)
+    {
+        try
+        {
+            var provider = new OllamaProvider();
+            var embeddingModel = new OllamaEmbeddingModel(provider, id: "all-minilm");
+            var llm = new OllamaChatModel(provider, id: "llama3.2:1b");
 
+            var vectorDatabase = new SqLiteVectorDatabase(dataSource: "vectors.db");
+
+            var vectorCollection = await vectorDatabase.AddDocumentsFromAsync<DocxDocumentLoader>(
+                embeddingModel, // Used to convert text to embeddings
+                dimensions: 384, // Should be 384 for all-minilm
+                dataSource: DataSource.FromPath("tax.docx"),
+                collectionName: "harry_docx",
+                textSplitter: null,
+                behavior: AddDocumentsToDatabaseBehavior.JustReturnCollectionIfCollectionIsAlreadyExists);
+
+
+            var question = request.Question;
+            var similarDocuments = await vectorCollection.GetSimilarDocuments(embeddingModel, question, amount: 5);
+            // Use similar documents and LLM to answer the question
+            var answer = await llm.GenerateAsync(
+$"""
+Use the following pieces of context to answer the question at the end.
+If the answer is not in context then just say that you don't know, and don't try to make up an answer.
+Answer with the final result only. Do not explain. Keep it extremely short.
+
+{similarDocuments.AsString()}
+
+Question: {question}
+Answer:
+""");
+
+            Console.WriteLine($"LLM answer: {answer}");
+
+            return new ChatResponse
+            {
+                Content = answer[0]?.ToString() ?? string.Empty,
+
+            };
+
+        }
+        catch(Exception ex)
+        {
+            Console.WriteLine("error", ex);
+            return new ChatResponse
+            {
+                Content = string.Empty,
+
+            };
+        }
         
+    }
+    static string ExtractTextFromDocx(string filePath)
+    {
+        try
+        {
+            using (WordprocessingDocument doc = WordprocessingDocument.Open(filePath, false))
+            {
+                Body body = doc.MainDocumentPart.Document.Body ?? null;
+
+                if (body == null)
+                    return string.Empty;
+
+                // 문단별로 텍스트 추출 후 결합
+                return string.Join("\n",
+                    body.Descendants<Paragraph>()
+                        .Select(p => p.InnerText));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"DOCX 파일 처리 중 오류 발생: {ex.Message}");
+            return string.Empty;
+        }
     }
 }
 
